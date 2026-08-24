@@ -36,8 +36,8 @@ Given a string \`s\`, return \`True\` if it is a palindrome, or \`False\` otherw
         right -= 1
     return True`,
     testCases: [
-      { id: 'vp-1', input: { s: "A man, a plan, a canal: Panama" }, expectedOutput: true, explanation: '"amanaplanacanalpanama" is a palindrome.' },
-      { id: 'vp-2', input: { s: "race a car" }, expectedOutput: false, explanation: '"raceacar" is not a palindrome.' },
+      { id: 'vp-1', input: { s: "A man, a plan, a canal: Panama" }, expectedOutput: true, explanation: "amanaplanacanalpanama is a palindrome." },
+      { id: 'vp-2', input: { s: "race a car" }, expectedOutput: false, explanation: "raceacar is not a palindrome." },
       { id: 'vp-3', input: { s: " " }, expectedOutput: true, isHidden: true },
       { id: 'vp-4', input: { s: "0P" }, expectedOutput: false, isHidden: true },
       { id: 'vp-5', input: { s: "a." }, expectedOutput: true, isHidden: true }
@@ -378,9 +378,9 @@ def decrypt(code: List[int], k: int) -> List[int]:
         max_len = max(max_len, right - left + 1)
     return max_len`,
     testCases: [
-      { id: 'lsw-1', input: { s: "abcabcbb" }, expectedOutput: 3, explanation: '"abc" with length 3.' },
-      { id: 'lsw-2', input: { s: "bbbbb" }, expectedOutput: 1, explanation: '"b" with length 1.' },
-      { id: 'lsw-3', input: { s: "pwwkew" }, expectedOutput: 3, explanation: '"wke" with length 3.' },
+      { id: 'lsw-1', input: { s: "abcabcbb" }, expectedOutput: 3, explanation: "abc with length 3." },
+      { id: 'lsw-2', input: { s: "bbbbb" }, expectedOutput: 1, explanation: "b with length 1." },
+      { id: 'lsw-3', input: { s: "pwwkew" }, expectedOutput: 3, explanation: "wke with length 3." },
       { id: 'lsw-4', input: { s: "" }, expectedOutput: 0, isHidden: true },
       { id: 'lsw-5', input: { s: "abba" }, expectedOutput: 2, isHidden: true }
     ],
@@ -1144,10 +1144,40 @@ def max_path_sum(nodes: List[Optional[int]]) -> int:
     solutionCode: `from typing import List, Optional
 
 def max_path_sum(nodes: List[Optional[int]]) -> int:
-    if not nodes:
+    if not nodes or nodes[0] is None:
         return 0
-    valid_nodes = [x for x in nodes if x is not None]
-    return max(valid_nodes) if max(valid_nodes) < 0 else sum(x for x in valid_nodes if x > 0)`,
+    class Node:
+        def __init__(self, val):
+            self.val = val
+            self.left = None
+            self.right = None
+
+    root = Node(nodes[0])
+    q = [root]
+    i = 1
+    while q and i < len(nodes):
+        curr = q.pop(0)
+        if i < len(nodes) and nodes[i] is not None:
+            curr.left = Node(nodes[i])
+            q.append(curr.left)
+        i += 1
+        if i < len(nodes) and nodes[i] is not None:
+            curr.right = Node(nodes[i])
+            q.append(curr.right)
+        i += 1
+
+    max_sum = float('-inf')
+    def dfs(n):
+        nonlocal max_sum
+        if not n:
+            return 0
+        left_gain = max(dfs(n.left), 0)
+        right_gain = max(dfs(n.right), 0)
+        max_sum = max(max_sum, n.val + left_gain + right_gain)
+        return n.val + max(left_gain, right_gain)
+
+    dfs(root)
+    return int(max_sum)`,
     testCases: [
       { id: 'mps-1', input: { nodes: [1, 2, 3] }, expectedOutput: 6 },
       { id: 'mps-2', input: { nodes: [-10, 9, 20, null, null, 15, 7] }, expectedOutput: 42 }

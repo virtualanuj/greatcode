@@ -3,6 +3,7 @@
 /.pnp
 .pnp.js
 .npm-cache/
+.verify_cache/
 
 # testing
 /coverage
