@@ -1,6 +1,6 @@
 # Technical Specification Document: Python DSA Learning & Practice Platform
 
-**Document Version:** 1.1.0 (Synchronized with Final Intent)  
+**Document Version:** 1.2.0 (Final Architecture & Edge Constraints)  
 **Project Identifier:** `learn_dsa` / **AlgoLens (PyDSA)**  
 **Status:** Approved for Engineering Implementation  
 **Target Audience:** Frontend Engineers, Systems Engineers, UX Engineers, QA  
@@ -15,14 +15,14 @@ The application separates conceptual learning from hands-on coding practice into
 
 ```
 src/app/
-├── layout.tsx                # Global layout with Top Navigation & Theme Provider
+├── layout.tsx                # Global layout with Top Navigation (Theme Toggle, Engine Status, Backup)
 ├── page.tsx                  # Home Dashboard & Pattern Progression Overview
 ├── learn/                    # [Section 1: The Concept Lab]
 │   ├── page.tsx              # Index of all 9 Visual Pattern Modules
-│   └── [patternId]/page.tsx  # Interactive Visual Stepper with custom input sandbox
+│   └── [patternId]/page.tsx  # Interactive Visual Stepper with custom input sandbox & safety bounds
 └── practice/                 # [Section 2: The Practice Arena]
     ├── page.tsx              # 45-Problem Catalog (filter by Pattern & Difficulty)
-    └── [problemId]/page.tsx  # Monaco Python Editor & Automated Test Harness
+    └── [problemId]/page.tsx  # Monaco Python Editor & Direct Primitive Test Harness
 ```
 
 ### 1.2 High-Level Component Topology
@@ -30,10 +30,10 @@ src/app/
 ```mermaid
 graph TB
     subgraph "Client Layer (Next.js 14+ / React 18+ App Router)"
-        UI[Global Navbar & Progress Summary]
+        UI[Global Navbar: Dark/Light Toggle & Python Status Pill]
         
         subgraph "Section 1: /learn/[patternId] (Visual Concept Lab)"
-            InputSandbox[Custom Input Parameter Form]
+            InputSandbox[Custom Input Parameter Form with Safety Bounds]
             StepperCtrl[Timeline Playback & Scrub Controller]
             CodeSync[Python Code Line Synchronizer]
             CanvasEngine[Data Structure Visual Canvas: Array/Tree/DP/List]
@@ -55,7 +55,7 @@ graph TB
         WorkerBridge[python.worker.ts RPC Message Protocol]
         PyodideCore[Pyodide WASM Python 3.12 Engine]
         TracerPy[tracer.py: sys.settrace Event Generator]
-        TestRunnerPy[test_runner.py: Test Suite Evaluator]
+        TestRunnerPy[test_runner.py: Direct Primitive Test Evaluator & stdout buffer]
     end
 
     UI --> Store
@@ -123,15 +123,22 @@ export type DataStructureState =
   | GraphVisualState;
 ```
 
-### 2.2 Specialized Visualizer States
+### 2.2 Specialized Visualizer States & Input Safety Bounds
 
-#### A. Array & Pointer State (`ArrayVisualState`)
+#### A. Custom Input Safety Constraints
+To maintain smooth rendering and clean visual layouts, the Concept Lab enforces strict input bounds:
+* **1D Arrays**: Length between $2$ and $12$ elements; integers between $-999$ and $999$.
+* **Strings**: Length between $1$ and $16$ characters.
+* **DP 2D Grids**: Matrix dimensions up to $6 \times 6$; strings for 2D DP (LCS/Edit Distance) up to $8$ characters.
+* **Binary Trees**: Maximum $15$ nodes (depth $\le 4$).
+
+#### B. Array & Pointer State (`ArrayVisualState`)
 ```typescript
 export interface ArrayPointer {
-  id: string;               // e.g., 'left', 'right', 'slow', 'fast', 'pivot'
+  id: string;               // 'left', 'right', 'slow', 'fast', 'pivot'
   name: string;             // Display label
   index: number;            // Current array index
-  color: string;            // Tailwind color token (e.g., 'indigo', 'emerald', 'rose')
+  color: string;            // Tailwind color token ('blue', 'rose', 'amber', 'emerald')
 }
 
 export interface ArrayElement {
@@ -156,7 +163,7 @@ export interface ArrayVisualState {
 }
 ```
 
-#### B. Linked List State (`LinkedListVisualState`)
+#### C. Linked List State (`LinkedListVisualState`)
 ```typescript
 export interface LinkedListNode {
   id: string;
@@ -177,7 +184,7 @@ export interface LinkedListVisualState {
 }
 ```
 
-#### C. Binary Tree State (`TreeVisualState`)
+#### D. Binary Tree State (`TreeVisualState`)
 ```typescript
 export interface TreeNode {
   id: string;
@@ -196,7 +203,7 @@ export interface TreeVisualState {
 }
 ```
 
-#### D. Dynamic Programming Table State (`DPGridVisualState`)
+#### E. Dynamic Programming Table State (`DPGridVisualState`)
 ```typescript
 export interface DPCell {
   row: number;
@@ -229,8 +236,8 @@ export type DifficultyLevel = 'Easy' | 'Medium' | 'Hard';
 
 export interface TestCase {
   id: string;
-  input: Record<string, any>;
-  expectedOutput: any;
+  input: Record<string, any>;       // Standard primitive / array inputs
+  expectedOutput: any;              // Standard primitive / array outputs
   isHidden?: boolean;              // Hidden edge case test
   explanation?: string;
 }
@@ -274,61 +281,113 @@ export interface ProblemDefinition {
 
 ---
 
-## 4. Python Web Worker & Execution Safety
+## 4. Python Web Worker & Direct Execution Harness
 
 ### 4.1 Pyodide Web Worker Architecture (`python.worker.ts`)
-* Worker loads Pyodide 0.26+ via WebAssembly.
-* Watchdog Timer ($5000\text{ms}$) monitors message processing. If an execution exceeds $5000\text{ms}$ (infinite `while` loop or unpruned recursion), the parent thread terminates the worker (`worker.terminate()`), respawns a fresh worker instance, and returns a user-friendly timeout error.
+* Worker loads Pyodide 0.26+ via WebAssembly asynchronously from CDN with background initialization.
+* Main thread broadcasts engine state (`INITIALIZING` $\rightarrow$ `READY`).
+* Watchdog Timer ($5000\text{ms}$) terminates and respawns the worker on runaway loops.
 
-### 4.2 Web Worker RPC Messages
-```typescript
-export type WorkerRequest =
-  | { type: 'INIT_PYODIDE' }
-  | { type: 'RUN_TESTS'; payload: { code: string; entryFunction: string; testCases: TestCase[] } }
-  | { type: 'GENERATE_TRACE'; payload: { visualizerCode: string; entryFunction: string; customInputs: Record<string, any> } };
+### 4.2 Direct Primitive Test Evaluator (`test_runner.py`)
+To maintain architectural simplicity and transparency for learners, the test harness operates directly on Python primitives (lists, integers, strings, dicts) with zero hidden AST magic or complex conversions:
 
-export type WorkerResponse =
-  | { type: 'PYODIDE_READY' }
-  | { type: 'INIT_ERROR'; error: string }
-  | { type: 'TESTS_COMPLETED'; payload: { success: boolean; allPassed: boolean; results: any[]; error?: string } }
-  | { type: 'TRACE_COMPLETED'; payload: { events: TraceEvent[]; result: any } }
-  | { type: 'EXECUTION_TIMEOUT' }
-  | { type: 'EXECUTION_ERROR'; error: string };
+```python
+# test_runner.py (Embedded within Pyodide Worker)
+import json
+import time
+import sys
+import io
+
+def run_test_suite(user_code_str, entry_function, test_cases_json):
+    test_cases = json.loads(test_cases_json)
+    results = []
+    
+    stdout_buffer = io.StringIO()
+    sys.stdout = stdout_buffer
+    
+    globals_dict = {}
+    try:
+        exec(user_code_str, globals_dict)
+        if entry_function not in globals_dict:
+            return {
+                "success": False,
+                "error": f"Function '{entry_function}' was not found in your code.",
+                "results": []
+            }
+        func = globals_dict[entry_function]
+    except Exception as e:
+        sys.stdout = sys.__stdout__
+        return {
+            "success": False,
+            "error": f"Syntax/Runtime Error: {str(e)}",
+            "results": []
+        }
+
+    all_passed = True
+    for tc in test_cases:
+        tc_id = tc["id"]
+        tc_inputs = tc["input"]
+        expected = tc["expectedOutput"]
+        is_hidden = tc.get("isHidden", False)
+        
+        stdout_buffer.seek(0)
+        stdout_buffer.truncate(0)
+        
+        start_time = time.perf_counter()
+        try:
+            if isinstance(tc_inputs, dict):
+                actual = func(**tc_inputs)
+            elif isinstance(tc_inputs, list):
+                actual = func(*tc_inputs)
+            else:
+                actual = func(tc_inputs)
+                
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            passed = (actual == expected)
+            if not passed:
+                all_passed = False
+                
+            captured_stdout = stdout_buffer.getvalue()
+            
+            results.append({
+                "testCaseId": tc_id,
+                "passed": passed,
+                "input": tc_inputs if not is_hidden else "[Hidden]",
+                "expectedOutput": expected if not is_hidden else "[Hidden]",
+                "actualOutput": actual if not is_hidden else ("[Hidden: Failed]" if not passed else "[Hidden: Passed]"),
+                "stdout": captured_stdout,
+                "executionTimeMs": round(elapsed_ms, 2),
+                "isHidden": is_hidden
+            })
+        except Exception as err:
+            all_passed = False
+            results.append({
+                "testCaseId": tc_id,
+                "passed": False,
+                "error": str(err),
+                "stdout": stdout_buffer.getvalue(),
+                "isHidden": is_hidden
+            })
+            
+    sys.stdout = sys.__stdout__
+    return {
+        "success": True,
+        "allPassed": all_passed,
+        "results": results
+    }
 ```
 
 ---
 
-## 5. Visualizer Canvas Component Specifications
+## 5. Persistence & Data Portability Schema
 
-### 5.1 Array & Two-Pointer Visualizer (`ArrayVisualizer.tsx`)
-* **Layout**: Centered horizontal flex row of indexed memory cells with Framer Motion layout animations.
-* **Pointers**: Visual badges (`left`, `right`, `slow`, `fast`, `pivot`) positioned above/below cells with distinct color tokens.
-* **Sliding Window**: Animated bounding box overlay spanning $[L, R]$ with dynamic width computation.
-* **Swaps**: Animated arc displacement when elements swap positions.
-
-### 5.2 Dynamic Programming Grid Visualizer (`DPGridVisualizer.tsx`)
-* **Layout**: 2D grid matrix with row/col labels (e.g. for `Coin Change`, `LCS`, `Edit Distance`).
-* **States**:
-  - `uncomputed`: Subtle gray outline.
-  - `computing`: Pulsing yellow border with tooltip formula (e.g., $\min(dp[i-1][j], dp[i][j-w]) + 1$).
-  - `computed`: Filled green/blue badge.
-  - `dependsOn`: Directed visual connectors to previous subproblem cells.
-
-### 5.3 Binary Tree Visualizer (`TreeVisualizer.tsx`)
-* **Layout**: SVG hierarchical tree layout with animated edge lines.
-* **Nodes**: Circular nodes with visit state styling (`unvisited`, `active`, `processing`, `completed`).
-
----
-
-## 6. Persistence & Data Portability Schema
-
-### 6.1 Local Storage Schema (`dsa_user_data`)
+### 5.1 Local Storage Schema (`dsa_user_data`)
 ```typescript
 export interface UserProgressData {
-  version: '1.1.0';
+  version: '1.2.0';
   completedProblemIds: string[];
   bookmarkedProblemIds: string[];
-  customDrafts: Record<string, string>; // problemId -> user python code
+  customDrafts: Record<string, string>;
   settings: {
     theme: 'dark' | 'light';
     playbackSpeed: number;
@@ -338,16 +397,6 @@ export interface UserProgressData {
 }
 ```
 
-### 6.2 1-Click JSON Backup & Restore API
-* **Export**: Serializes `UserProgressData` to a downloadable file `algolens_progress_backup.json`.
-* **Import**: Validates JSON schema structure, restores user code drafts and solved status into IndexedDB/LocalStorage, and refreshes application state.
-
----
-
-## 7. Next Implementation Steps
-1. Initialize Next.js 14+ project in `/Users/anuj/workspace/learn_dsa`.
-2. Configure Tailwind CSS, Lucide-React, and Framer Motion.
-3. Build Pyodide Web Worker runner and tracer script.
-4. Build the Visual Stepper Canvas components and Custom Input Sandbox for `/learn`.
-5. Build the Monaco Code Editor, Hint Ladder, and Test Case Console for `/practice`.
-6. Seed the 45 curated problems across the 9 patterns.
+### 5.2 1-Click JSON Backup & Restore API
+* **Export**: Downloads timestamped `algolens_progress_backup.json`.
+* **Import**: Validates schema and restores all code drafts, bookmarks, and solved statuses into LocalStorage / IndexedDB.
