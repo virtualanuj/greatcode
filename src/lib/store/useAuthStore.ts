@@ -82,13 +82,18 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   signInWithGitHub: async () => {
     if (!isSupabaseConfigured || !supabase) {
       alert(
-        'Supabase is not configured yet. Please add NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY to .env.local'
+        'Supabase is not configured yet. Please add NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY to .env.local / Vercel Environment Variables'
       );
       return;
     }
 
     set({ isLoading: true, errorMessage: null });
-    const redirectUrl = typeof window !== 'undefined' ? window.location.origin : '';
+    
+    // Automatically detect current domain (e.g. https://greatcode.in or http://localhost:3000)
+    const redirectUrl =
+      typeof window !== 'undefined'
+        ? `${window.location.origin}`
+        : '';
 
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'github',
