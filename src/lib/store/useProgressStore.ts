@@ -1,6 +1,8 @@
 // src/lib/store/useProgressStore.ts
 import { create } from 'zustand';
 import { UserProgressData } from '@/types/store.types';
+import { syncService } from '@/lib/sync/syncService';
+import { useAuthStore } from '@/lib/store/useAuthStore';
 
 interface ProgressState {
   completedProblemIds: string[];
@@ -8,7 +10,7 @@ interface ProgressState {
   customDrafts: Record<string, string>;
   lastActivePatternId: string;
   lastActiveProblemId: string | null;
-  
+
   // Actions
   toggleProblemCompleted: (problemId: string) => void;
   markProblemCompleted: (problemId: string) => void;
@@ -17,6 +19,7 @@ interface ProgressState {
   getCodeDraft: (problemId: string, fallback: string) => string;
   setLastActive: (patternId: string, problemId?: string) => void;
   loadFromStorage: () => void;
+  syncWithCloud: (userId: string) => Promise<void>;
   restoreFromBackup: (data: UserProgressData) => void;
   getExportData: () => UserProgressData;
 }
@@ -36,11 +39,20 @@ export const useProgressStore = create<ProgressState>((set, get) => ({
       const next = exists
         ? state.completedProblemIds.filter((id) => id !== problemId)
         : [...state.completedProblemIds, problemId];
-      
-      const updated = { ...state, completedProblemIds: next };
+
       if (typeof window !== 'undefined') {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(get().getExportData()));
+        localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...get().getExportData(), completedProblemIds: next }));
       }
+
+      // Cloud background sync if authenticated
+      const user = useAuthStore.getState().user;
+      if (user) {
+        syncService.queueProgressSync(user.id, {
+          ...get().getExportData(),
+          completedProblemIds: next,
+        });
+      }
+
       return { completedProblemIds: next };
     });
   },
@@ -49,10 +61,20 @@ export const useProgressStore = create<ProgressState>((set, get) => ({
     set((state) => {
       if (state.completedProblemIds.includes(problemId)) return state;
       const next = [...state.completedProblemIds, problemId];
-      const updated = { ...state, completedProblemIds: next };
+
       if (typeof window !== 'undefined') {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(get().getExportData()));
+        localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...get().getExportData(), completedProblemIds: next }));
       }
+
+      // Cloud background sync if authenticated
+      const user = useAuthStore.getState().user;
+      if (user) {
+        syncService.queueProgressSync(user.id, {
+          ...get().getExportData(),
+          completedProblemIds: next,
+        });
+      }
+
       return { completedProblemIds: next };
     });
   },
@@ -63,10 +85,20 @@ export const useProgressStore = create<ProgressState>((set, get) => ({
       const next = exists
         ? state.bookmarkedProblemIds.filter((id) => id !== problemId)
         : [...state.bookmarkedProblemIds, problemId];
-      
+
       if (typeof window !== 'undefined') {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(get().getExportData()));
+        localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...get().getExportData(), bookmarkedProblemIds: next }));
       }
+
+      // Cloud background sync if authenticated
+      const user = useAuthStore.getState().user;
+      if (user) {
+        syncService.queueProgressSync(user.id, {
+          ...get().getExportData(),
+          bookmarkedProblemIds: next,
+        });
+      }
+
       return { bookmarkedProblemIds: next };
     });
   },
@@ -74,9 +106,20 @@ export const useProgressStore = create<ProgressState>((set, get) => ({
   saveCodeDraft: (problemId: string, code: string) => {
     set((state) => {
       const nextDrafts = { ...state.customDrafts, [problemId]: code };
+
       if (typeof window !== 'undefined') {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...get().getExportData(), customDrafts: nextDrafts }));
+        localStorage.setItem(
+          STORAGE_KEY,
+          JSON.stringify({ ...get().getExportData(), customDrafts: nextDrafts })
+        );
       }
+
+      // Cloud background sync for code drafts if authenticated
+      const user = useAuthStore.getState().user;
+      if (user) {
+        syncService.queueDraftSync(user.id, problemId, code);
+      }
+
       return { customDrafts: nextDrafts };
     });
   },
@@ -86,9 +129,10 @@ export const useProgressStore = create<ProgressState>((set, get) => ({
   },
 
   setLastActive: (patternId: string, problemId?: string) => {
+    const nextProblemId = problemId || get().lastActiveProblemId;
     set({
       lastActivePatternId: patternId,
-      lastActiveProblemId: problemId || get().lastActiveProblemId,
+      lastActiveProblemId: nextProblemId,
     });
     if (typeof window !== 'undefined') {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(get().getExportData()));
@@ -104,7 +148,7 @@ export const useProgressStore = create<ProgressState>((set, get) => ({
       set({
         completedProblemIds: parsed.completedProblemIds || [],
         bookmarkedProblemIds: parsed.bookmarkedProblemIds || [],
-        customDrafts: parsed.customDrafts || {},
+        customDrafts: parsed.customDrafts || parsed.codeDrafts || {},
         lastActivePatternId: parsed.lastActivePatternId || 'two-pointers',
         lastActiveProblemId: parsed.lastActiveProblemId || 'two-sum-ii',
       });
@@ -113,16 +157,38 @@ export const useProgressStore = create<ProgressState>((set, get) => ({
     }
   },
 
+  syncWithCloud: async (userId: string) => {
+    const localData = get().getExportData();
+    const merged = await syncService.syncOnLogin(userId, localData);
+    set({
+      completedProblemIds: merged.completedProblemIds,
+      bookmarkedProblemIds: merged.bookmarkedProblemIds,
+      customDrafts: merged.codeDrafts || {},
+      lastActivePatternId: merged.lastActivePatternId || 'two-pointers',
+      lastActiveProblemId: merged.lastActiveProblemId || 'two-sum-ii',
+    });
+
+    if (typeof window !== 'undefined') {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(get().getExportData()));
+    }
+  },
+
   restoreFromBackup: (data: UserProgressData) => {
+    const drafts = data.customDrafts || data.codeDrafts || {};
     set({
       completedProblemIds: data.completedProblemIds || [],
       bookmarkedProblemIds: data.bookmarkedProblemIds || [],
-      customDrafts: data.customDrafts || {},
+      customDrafts: drafts,
       lastActivePatternId: data.lastActivePatternId || 'two-pointers',
       lastActiveProblemId: data.lastActiveProblemId || null,
     });
     if (typeof window !== 'undefined') {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    }
+
+    const user = useAuthStore.getState().user;
+    if (user) {
+      syncService.queueProgressSync(user.id, data);
     }
   },
 
@@ -133,6 +199,7 @@ export const useProgressStore = create<ProgressState>((set, get) => ({
       completedProblemIds: s.completedProblemIds,
       bookmarkedProblemIds: s.bookmarkedProblemIds,
       customDrafts: s.customDrafts,
+      codeDrafts: s.customDrafts,
       settings: {
         theme: 'dark',
         playbackSpeed: 1.0,

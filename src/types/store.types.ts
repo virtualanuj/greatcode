@@ -6,6 +6,7 @@ export interface UserProgressData {
   completedProblemIds: string[];
   bookmarkedProblemIds: string[];
   customDrafts: Record<string, string>; // problemId -> code string
+  codeDrafts?: Record<string, string>;
   settings: {
     theme: 'dark' | 'light';
     playbackSpeed: number;
